@@ -1,47 +1,34 @@
--- fiat_hub_delta.lua
+-- fiat_hub_delta.lua (corrigido para garantir que a UI apareça)
 -- Versão adaptada para executor "Delta"
--- Ajustes principais:
---  - Melhor fallback para simular teclas em executores (inclui tentativas específicas para Delta)
---  - Carregamento protegido do Fluent e fallback de GUI caso o Fluent não consiga criar a janela visível
---  - Mantém Aim Bot, Auto Block e ESP conforme pedido
--- Idioma: Português (comentários e notificações)
--- Nota: rodar em executor Delta. Se algo ainda não funcionar (ex.: simular teclas), copie a saída do console (print/warn) e me envie.
+-- Ajustes:
+--  - Garante LocalPlayer disponível
+--  - Criação do Fluent protegida por pcall; fallback funcional em ScreenGui se necessário
+--  - Prints/warns para debugging no executor
 
 -- Serviços
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
+local StarterGui = game:GetService("StarterGui")
+
+-- garante LocalPlayer válido (alguns ambientes podem não ter imediatamente)
 local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    repeat task.wait(0.03) LocalPlayer = Players.LocalPlayer until LocalPlayer
+end
 
 -- Helpers
 local function safeWait(t) task.wait(t or 0.03) end
 
 -- ---------- carrega Fluent com pcall ----------
 local ok, Fluent = pcall(function()
+    -- URL: pode variar conforme a fonte; pcall protege falhas
     return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 end)
 if not ok or not Fluent then
-    warn("[fiat_hub] Falha ao carregar Fluent (Delta). Mensagem:", Fluent)
-    -- fallback simples: cria um ScreenGui informando erro e retorna (não quebra o jogo)
-    local fallbackGui = Instance.new("ScreenGui")
-    fallbackGui.Name = "FiatHubFallback"
-    pcall(function() fallbackGui.Parent = CoreGui end)
-    if not fallbackGui.Parent then
-        pcall(function() fallbackGui.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") end)
-    end
-    local frame = Instance.new("Frame", fallbackGui)
-    frame.Size = UDim2.new(0,420,0,120)
-    frame.Position = UDim2.new(0.5,-210,0.1,0)
-    frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    local label = Instance.new("TextLabel", frame)
-    label.Size = UDim2.new(1,-20,1,-20)
-    label.Position = UDim2.new(0,10,0,10)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.fromRGB(255,255,255)
-    label.TextWrapped = true
-    label.Text = "fiat hub (fallback)\nFalha ao carregar Fluent. Veja Output/Console para mais detalhes.\nErro: "..tostring(Fluent)
-    return
+    warn("[fiat_hub] Falha ao carregar Fluent. Mensagem:", Fluent)
+    Fluent = nil
 end
 
 -- tenta carregar addons (pcall para segurança)
@@ -52,28 +39,22 @@ pcall(function() InterfaceManager = loadstring(game:HttpGet("https://raw.githubu
 -- ---------- função para pressionar teclas (muitos fallbacks, incluindo Delta) ----------
 local keypressMethod = nil -- string descrevendo o método detectado
 local function detectKeypressMethod()
-    -- já detectado?
     if keypressMethod then return keypressMethod end
 
-    -- 1) syn.keypress (Synapse)
     if type(syn) == "table" and syn.keypress then
         keypressMethod = "syn.keypress"
         return keypressMethod
     end
 
-    -- 2) global keypress (alguns executores expõem function keypress)
     if type(keypress) == "function" then
         keypressMethod = "global.keypress"
         return keypressMethod
     end
 
-    -- 3) Delta-specific heuristics
-    -- checa global 'delta' / 'Delta' / 'DELTA' com possíveis métodos
     local deltaCandidates = {"delta","Delta","DELTA"}
     for _, name in ipairs(deltaCandidates) do
         local ok, val = pcall(function() return _G[name] or _G[name:lower()] or _G[name:upper()] end)
         if ok and val then
-            -- tenta detectar métodos comuns
             if type(val) == "table" then
                 if val.keypress and type(val.keypress) == "function" then
                     keypressMethod = "delta.keypress"
@@ -94,28 +75,23 @@ local function detectKeypressMethod()
         end
     end
 
-    -- 4) VirtualInputManager (Roblox internal, present in many exploits)
     local success, vim = pcall(function() return game:GetService("VirtualInputManager") end)
     if success and vim and vim.SendKeyEvent then
         keypressMethod = "VirtualInputManager"
         return keypressMethod
     end
 
-    -- 5) VirtualUser fallback (não envia teclas, mas mantemos)
     local vu = game:GetService("VirtualUser")
     if vu then
         keypressMethod = "VirtualUser"
         return keypressMethod
     end
 
-    -- 6) nenhum método detectado
     keypressMethod = "none"
     return keypressMethod
 end
 
--- função que envia uma tecla (string). Retorna true se aparentemente enviou.
 local function pressKey(keyStr)
-    -- keyStr pode ser "q", "r" (minúsculo/maiusculo) ou "Q"/"R"
     local method = detectKeypressMethod()
     pcall(function() print("[fiat_hub] keypress method:", method) end)
 
@@ -130,12 +106,10 @@ local function pressKey(keyStr)
     end
 
     if method == "delta.keypress" or method == "delta.KeyPress" or method == "delta.Input" or method == "delta.globalfunc" then
-        -- tenta diversas formas via _G candidates
         local deltaNames = {"delta","Delta","DELTA"}
         for _, nm in ipairs(deltaNames) do
             local obj = _G[nm] or _G[nm:lower()] or _G[nm:upper()]
             if obj then
-                -- tenta keypress
                 pcall(function()
                     if type(obj.keypress) == "function" then obj.keypress(keyStr) end
                     if type(obj.KeyPress) == "function" then obj.KeyPress(keyStr) end
@@ -163,12 +137,10 @@ local function pressKey(keyStr)
         end
     end
 
-    -- VirtualUser can't press keyboard keys reliably, but keep for completeness
     if method == "VirtualUser" then
         pcall(function()
             local vu = game:GetService("VirtualUser")
             vu:CaptureController()
-            -- no reliable key press available; can't emulate Q/R
         end)
         return false
     end
@@ -229,7 +201,6 @@ local aimConn = nil
 
 local function findClosestKiller()
     local best, bestD = nil, math.huge
-    -- players: name or displayname containing "killer"
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
             local name = tostring(plr.Name):lower()
@@ -241,7 +212,6 @@ local function findClosestKiller()
             end
         end
     end
-    -- parts named "killer" anywhere
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("BasePart") then
             local n = tostring(obj.Name):lower()
@@ -268,7 +238,7 @@ local function startAim()
                 local camPos = cam.CFrame.Position
                 local lookAt = tgtPos + Vector3.new(0, 1.5, 0)
                 local desired = CFrame.new(camPos, lookAt)
-                local alpha = math.clamp(5 * dt, 0, 1) -- suavidade
+                local alpha = math.clamp(5 * dt, 0, 1)
                 cam.CFrame = cam.CFrame:Lerp(desired, alpha)
                 pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
             end
@@ -286,7 +256,7 @@ end
 -- ---------- lógica Auto Block ----------
 local autoEnabled = false
 local autoRadius = 30
-local knownDamagers = {} -- part -> true
+local knownDamagers = {}
 local watched = false
 local blockCooldown = 26
 local lastBlock = 0
@@ -301,15 +271,12 @@ end
 local function watchPartForDamage(part)
     if not part or not part:IsA("BasePart") then return end
     if knownDamagers[part] then return end
-    -- não conectar dezenas de vezes no mesmo part
     knownDamagers[part] = knownDamagers[part] or false
 
     local conn
     conn = part.Touched:Connect(function(hit)
-        -- somente se tocar no character do local player
         if not LocalPlayer.Character then return end
         if not hit or not hit:IsDescendantOf(LocalPlayer.Character) then return end
-        -- checar antes e depois de saúde
         local hum = getLocalHumanoid()
         if not hum then return end
         local before = hum.Health
@@ -446,74 +413,169 @@ local function disableESP()
     for plr, _ in pairs(espStore) do removeESP(plr) end
 end
 
--- ---------- UI (Fluent) ----------
-local Window = Fluent:CreateWindow({
-    Title = "fiat hub",
-    SubTitle = "by fiat (Delta)",
-    TabWidth = 160,
-    Size = UDim2.fromOffset(640,480),
-    Acrylic = true,
-    Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl
-})
+-- ---------- UI (Fluent) com fallback ----------
+local Window = nil
+local Options = nil
 
-local Tabs = {
-    Combat = Window:AddTab({ Title = "Combat", Icon = "sword" }),
-    Main = Window:AddTab({ Title = "Main", Icon = "" }),
-    Settings = Window:AddTab({ Title = "Configurações", Icon = "settings" })
-}
-local Options = Fluent.Options
-
--- Aim toggle
-local AimToggle = Tabs.Combat:AddToggle("AimBotKiller", { Title = "aim bot killer", Default = false })
-AimToggle:OnChanged(function()
-    aimEnabled = AimToggle.Value
-    if aimEnabled then startAim() else stopAim() end
-end)
-Options.AimBotKiller:SetValue(false)
-
--- Auto block toggle
-local AutoToggle = Tabs.Combat:AddToggle("AutoBlock", { Title = "auto block 🛡️⚠️", Default = false })
-AutoToggle:OnChanged(function()
-    autoEnabled = AutoToggle.Value
-    if autoEnabled then startAuto() else stopAuto() end
-end)
-Options.AutoBlock:SetValue(false)
-
--- ESP toggle
-local ESPToggle = Tabs.Combat:AddToggle("ESPPlayers", { Title = "ESP", Default = false })
-ESPToggle:OnChanged(function()
-    if ESPToggle.Value then enableESP() else disableESP() end
-end)
-Options.ESPPlayers:SetValue(false)
-
--- Addons config (se existirem)
-if SaveManager then
-    pcall(function() SaveManager:SetLibrary(Fluent) SaveManager:IgnoreThemeSettings() SaveManager:SetFolder("FiatHubConfigs/specific-game") InterfaceManager:SetLibrary(Fluent) InterfaceManager:SetFolder("FiatHubConfigs") InterfaceManager:BuildInterfaceSection(Tabs.Settings) SaveManager:BuildConfigSection(Tabs.Settings) end)
-end
-
-Window:SelectTab(1)
-Fluent:Notify({ Title = "fiat hub", Content = "Carregado para executor Delta. Se você não ver a UI, verifique se o executor permite GUIs no CoreGui.", Duration = 6 })
-
--- iniciar watchers
-initDamageWatchers()
-
--- mantém limpeza quando a biblioteca for descarregada
-task.spawn(function()
-    while true do
-        safeWait(1)
-        if Fluent.Unloaded then
-            aimEnabled = false; stopAim()
-            autoEnabled = false; stopAuto()
-            disableESP()
-            break
-        end
+if Fluent then
+    local okW, winOrErr = pcall(function()
+        return Fluent:CreateWindow({
+            Title = "fiat hub",
+            SubTitle = "by fiat (Delta)",
+            TabWidth = 160,
+            Size = UDim2.fromOffset(640,480),
+            Acrylic = true,
+            Theme = "Dark",
+            MinimizeKey = Enum.KeyCode.LeftControl
+        })
+    end)
+    if okW and winOrErr then
+        Window = winOrErr
+        pcall(function() Options = Fluent.Options end)
+    else
+        warn("[fiat_hub] Fluent criou janela? não. Erro:", winOrErr)
+        Window = nil
     end
-end)
-
--- DEBUG: imprime método detectado para keypress (útil para você me dizer se funcionou)
-local detected = detectKeypressMethod()
-print("[fiat_hub] Método de keypress detectado:", detected)
-if detected == "none" or detected == "VirtualUser" then
-    warn("[fiat_hub] Nenhum método confiável para simular teclas foi detectado. Auto block pode não funcionar. Diga qual executor você usa (Delta confirmado).")
 end
+
+-- Se Fluent não criou janela, cria fallback ScreenGui com botões básicos
+local function createFallbackUI()
+    local fallbackGui = Instance.new("ScreenGui")
+    fallbackGui.Name = "FiatHubFallback"
+    -- prefer CoreGui, senão PlayerGui
+    local parentOK = pcall(function() fallbackGui.Parent = CoreGui end)
+    if not parentOK or not fallbackGui.Parent then
+        pcall(function() fallbackGui.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") end)
+    end
+
+    local frame = Instance.new("Frame", fallbackGui)
+    frame.Size = UDim2.new(0,360,0,160)
+    frame.Position = UDim2.new(0.5,-180,0.08,0)
+    frame.BackgroundColor3 = Color3.fromRGB(28,28,28)
+    frame.BorderSizePixel = 0
+    frame.AnchorPoint = Vector2.new(0,0)
+
+    local title = Instance.new("TextLabel", frame)
+    title.Size = UDim2.new(1,0,0,28)
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.new(0,0,0,0)
+    title.Text = "fiat hub (fallback)"
+    title.TextColor3 = Color3.new(1,1,1)
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 18
+
+    local function makeButton(name, y, text, onClick)
+        local btn = Instance.new("TextButton", frame)
+        btn.Size = UDim2.new(0,160,0,36)
+        btn.Position = UDim2.new(0,12,y,0)
+        btn.Text = text
+        btn.Name = name
+        btn.BackgroundColor3 = Color3.fromRGB(45,45,45)
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.Font = Enum.Font.SourceSans
+        btn.TextSize = 16
+        btn.BorderSizePixel = 0
+        btn.MouseButton1Click:Connect(function()
+            pcall(onClick, btn)
+        end)
+        return btn
+    end
+
+    local aimBtn = makeButton("AimBtn", 36, "Aim: OFF", function(btn)
+        aimEnabled = not aimEnabled
+        if aimEnabled then
+            btn.Text = "Aim: ON"
+            startAim()
+        else
+            btn.Text = "Aim: OFF"
+            stopAim()
+        end
+    end)
+
+    local autoBtn = makeButton("AutoBtn", 84, "AutoBlock: OFF", function(btn)
+        autoEnabled = not autoEnabled
+        if autoEnabled then
+            btn.Text = "AutoBlock: ON"
+            startAuto()
+        else
+            btn.Text = "AutoBlock: OFF"
+            stopAuto()
+        end
+    end)
+
+    local espBtn = makeButton("ESPBtn", 132, "ESP: OFF", function(btn)
+        espEnabled = not espEnabled
+        if espEnabled then
+            btn.Text = "ESP: ON"
+            enableESP()
+        else
+            btn.Text = "ESP: OFF"
+            disableESP()
+        end
+    end)
+
+    -- label de instrução
+    local info = Instance.new("TextLabel", frame)
+    info.Size = UDim2.new(1,-24,0,40)
+    info.Position = UDim2.new(0,12,0.5,0)
+    info.BackgroundTransparency = 1
+    info.TextWrapped = true
+    info.Text = "Fallback UI ativa. Fluent não foi carregado ou não criou janela. Use estes botões enquanto investiga o executor (veja Output)."
+    info.TextColor3 = Color3.fromRGB(180,180,180)
+    info.Font = Enum.Font.SourceSans
+    info.TextSize = 14
+end
+
+-- Se Window existiu: cria tabs e toggles usando Fluent (protegido)
+if Window then
+    local Tabs = {
+        Combat = Window:AddTab({ Title = "Combat", Icon = "sword" }),
+        Main = Window:AddTab({ Title = "Main", Icon = "" }),
+        Settings = Window:AddTab({ Title = "Configurações", Icon = "settings" })
+    }
+
+    -- proteção caso API de Fluent seja diferente; usamos pcall por segurança
+    pcall(function()
+        local AimToggle = Tabs.Combat:AddToggle("AimBotKiller", { Title = "aim bot killer", Default = false })
+        AimToggle:OnChanged(function()
+            aimEnabled = AimToggle.Value
+            if aimEnabled then startAim() else stopAim() end
+        end)
+    end)
+
+    pcall(function()
+        local AutoToggle = Tabs.Combat:AddToggle("AutoBlock", { Title = "auto block 🛡️⚠️", Default = false })
+        AutoToggle:OnChanged(function()
+            autoEnabled = AutoToggle.Value
+            if autoEnabled then startAuto() else stopAuto() end
+        end)
+    end)
+
+    pcall(function()
+        local ESPToggle = Tabs.Combat:AddToggle("ESPPlayers", { Title = "ESP", Default = false })
+        ESPToggle:OnChanged(function()
+            if ESPToggle.Value then enableESP() else disableESP() end
+        end)
+    end)
+
+    -- Addons config (se existirem)
+    if SaveManager and InterfaceManager then
+        pcall(function()
+            SaveManager:SetLibrary(Fluent)
+            SaveManager:IgnoreThemeSettings()
+            SaveManager:SetFolder("FiatHubConfigs/specific-game")
+            InterfaceManager:SetLibrary(Fluent)
+            InterfaceManager:SetFolder("FiatHubConfigs")
+            InterfaceManager:BuildInterfaceSection(Tabs.Settings)
+            SaveManager:BuildConfigSection(Tabs.Settings)
+        end)
+    end
+
+    pcall(function() Window:SelectTab(1) end)
+    pcall(function() Fluent:Notify({ Title = "fiat hub", Content = "Carregado para executor Delta. Se você não ver a UI, verifique se o executor permite GUIs no CoreGui.", Duration = 6 }) end)
+else
+    -- cria fallback se Fluent não estiver presente/funcional
+    createFallbackUI()
+    -- notifica via StarterGui (se disponível)
+    pcall(function()
+        StarterGui:SetCor
